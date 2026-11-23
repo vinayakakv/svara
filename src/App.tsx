@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { analysisWindowSize, noteForFrequency, swaraForFrequency, type PitchMethod, type PitchResult } from './audio/pitch'
 import PitchContour, { type PitchPoint } from './PitchContour'
+import TanpuraPanel from './TanpuraPanel'
 import styles from './App.module.css'
 
 type Reading = PitchResult
@@ -451,6 +452,7 @@ function App() {
         </div>
         </div>
 
+        <TanpuraPanel saHz={saHz} />
         <p className={styles.privacyNote}>Audio stays in your browser. Best with one voice or instrument at a time.</p>
       </main>
     </div>

@@ -13,6 +13,8 @@ Open the URL Vite prints (normally [http://localhost:5173](http://localhost:5173
 
 The input source and listening control are in the top bar. The pitch contour is the primary panel, with a compact live pitch, svara/note, and cents strip directly below it. Detector, reference Sa, tuner, level, and threshold controls sit in a separate settings area. Type any Sa frequency from 50–1000 Hz, or choose an octave and a C, D, G, or A preset.
 
+The bottom Tanpura panel plays a synthesized four-string drone through Web Audio. It follows the current reference Sa and lets you choose Pa, Ma, or Sa for the first string, the drone octave, volume, and pluck interval. The drone has its own audio context and is not fed into the detector; use headphones when using the microphone so speaker sound does not bleed back into the input.
+
 ## Stack and signal path
 
 - **Bun + Vite + React + TypeScript** for a small, fast local app.
