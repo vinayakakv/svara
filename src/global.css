@@ -1,0 +1,18 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,500;1,500&display=swap');
+
+* { box-sizing: border-box; }
+html { min-width: 320px; }
+body { margin: 0; }
+button, input { font: inherit; }
+button { cursor: pointer; }
+::selection { background: #e9a86e; color: #172027; }
+
+html[data-theme='dark'] { scrollbar-color: #3a505b #0b1118; }
+html[data-theme='light'] { scrollbar-color: #b8c5c1 #f4f2eb; }
+html[data-theme='dark'] * { scrollbar-color: #3a505b #111b24; }
+html[data-theme='light'] * { scrollbar-color: #b8c5c1 #fffdf8; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+html[data-theme='dark']::-webkit-scrollbar-track { background: #0b1118; }
+html[data-theme='light']::-webkit-scrollbar-track { background: #f4f2eb; }
+html[data-theme='dark']::-webkit-scrollbar-thumb, html[data-theme='dark'] *::-webkit-scrollbar-thumb { background: #3a505b; border: 2px solid #0b1118; border-radius: 8px; }
+html[data-theme='light']::-webkit-scrollbar-thumb, html[data-theme='light'] *::-webkit-scrollbar-thumb { background: #b8c5c1; border: 2px solid #f4f2eb; border-radius: 8px; }
