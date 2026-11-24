@@ -1,10 +1,12 @@
 import { SHORT_SWARAS } from '../audio/pitch'
+import janyaCatalog from './janya-ragas.json'
 
 export type Raga = {
   id: string
   name: string
   kind: 'melakarta' | 'janya'
   number?: number
+  parent?: number
   ascending: string[]
   descending: string[]
   pitchClasses: number[]
@@ -38,10 +40,10 @@ const melaNames = [
   'Sucharitra', 'Jyotiswarupini', 'Dhatuvardani', 'Nasikabhushani', 'Kosalam', 'Rasikapriya',
 ]
 
-function createRaga(id: string, name: string, kind: Raga['kind'], ascending: string[], number?: number): Raga {
+function createRaga(id: string, name: string, kind: Raga['kind'], ascending: string[], descending: string[], number?: number, parent?: number): Raga {
   return {
-    id, name, kind, number, ascending, descending: [...ascending].reverse(),
-    pitchClasses: [...new Set(ascending.map(swara => pitchClass[swara]))].sort((a, b) => a - b),
+    id, name, kind, number, parent, ascending, descending,
+    pitchClasses: [...new Set([...ascending, ...descending].map(swara => pitchClass[swara]))].sort((a, b) => a - b),
   }
 }
 
@@ -51,19 +53,19 @@ export const MELAKARTA_RAGAS: Raga[] = melaNames.map((name, index) => {
   const [ri, ga] = lowerPairs[chakra]
   const [dha, ni] = upperPairs[index % 6]
   const ma = number <= 36 ? 'M1' : 'M2'
-  return createRaga(`mela-${number}`, name, 'melakarta', ['S', ri, ga, ma, 'P', dha, ni, 'S'], number)
+  const ascending = ['S', ri, ga, ma, 'P', dha, ni, 'S']
+  return createRaga(`mela-${number}`, name, 'melakarta', ascending, [...ascending].reverse(), number)
 })
 
-export const JANYA_RAGAS: Raga[] = [
-  createRaga('mohanam', 'Mohanam', 'janya', ['S', 'R2', 'G3', 'P', 'D2', 'S']),
-  createRaga('hamsadhwani', 'Hamsadhwani', 'janya', ['S', 'R2', 'G3', 'P', 'N3', 'S']),
-]
+export const JANYA_RAGAS: Raga[] = janyaCatalog.map(item =>
+  createRaga(item.id, item.name, 'janya', item.ascending, item.descending, undefined, item.parent),
+)
 
 export const RAGAS = [...JANYA_RAGAS, ...MELAKARTA_RAGAS]
 
 export function ragaSwaraAtClass(raga: Raga, semitone: number): string | null {
   const normalized = ((semitone % 12) + 12) % 12
-  return raga.ascending.find(swara => pitchClass[swara] === normalized) ?? null
+  return [...raga.ascending, ...raga.descending].find(swara => pitchClass[swara] === normalized) ?? null
 }
 
 export function ragaPitchAtFrequency(frequency: number, saHz: number, raga: Raga) {
