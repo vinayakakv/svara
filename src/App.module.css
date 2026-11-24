@@ -27,3 +27,18 @@ p{margin:0}
 .ragaAlert{padding:8px 11px;border:1px solid rgba(226,139,131,.5);border-radius:5px;background:rgba(226,139,131,.1);color:#f0a29c;font:10px 'DM Mono',monospace;letter-spacing:.3px}
 @media(max-width:780px){.dashboard{display:flex;flex-direction:column;gap:10px}.dashboard .historyGrid{order:1;width:100%}.dashboard .workspace{order:2;width:100%;display:flex;flex-direction:column}.dashboard .visualStack{grid-template-columns:1fr 1fr;grid-template-rows:132px}.dashboard .settingsGrid{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:580px){.dashboard{order:1}.dashboard .historyGrid{order:1;margin-top:0}.dashboard .workspace{order:2;display:flex}.dashboard .pitchCard{order:0}.dashboard .visualStack{order:1;grid-template-columns:1fr;grid-template-rows:132px 132px;margin-top:0}.dashboard .settings{order:2}.dashboard .settingsGrid{grid-template-columns:1fr 1fr}.pitchStrip{gap:8px;padding:8px 10px}.stripValue span{font-size:8px}.stripValue strong{font-size:18px}.stripValue small{font-size:9px}}
+
+/* Keep live values within fixed geometry while pitch readings change. */
+.tunerLabels,.tunerTicks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
+.tunerLabels span:nth-child(2),.tunerTicks span:nth-child(2){text-align:center}
+.tunerLabels span:nth-child(3),.tunerTicks span:nth-child(3){text-align:right}
+.pitchMeta{height:30px}
+.pitchMeta>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.signal{flex:none}
+.logCard{height:217px}
+.logList{max-height:168px}
+.stripValue{grid-template-columns:max-content auto}
+.stripValue:nth-child(1) strong{width:6ch}
+.stripValue:nth-child(2) strong,.stripValue:nth-child(3) strong{width:4ch}
+.ragaAlert{height:32px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-color:var(--line);background:var(--panel);color:var(--muted)}
+.ragaAlertActive{border-color:rgba(226,139,131,.5);background:rgba(226,139,131,.1);color:#f0a29c}

@@ -514,7 +514,7 @@ function App() {
               <div className={styles.tunerTrack}><div className={styles.tunerZone} /><div className={styles.tunerCenter} /><div className={styles.tunerNeedle} style={{ left: `${50 + cents}%`, opacity: reading ? 1 : .28 }} /></div>
               <div className={styles.tunerTicks}><span>−50</span><span>0</span><span>+50</span></div>
             </div>
-            <div className={styles.pitchMeta}><span>{reading ? `${Math.round(reading.confidence * 100)}% ${detector === 'acf' ? 'ACF correlation' : 'pitch confidence'}` : status === 'listening' ? inputRms < minRms ? 'Input below minimum level' : 'Audio present · no stable single pitch' : 'Waiting for audio'}</span><div className={styles.signal}><span>INPUT RMS</span><div><span style={{ width: `${strength}%` }} /></div><span>{inputRms.toFixed(4)}</span></div></div>
+            <div className={styles.pitchMeta}><span>{reading ? `${Math.round(reading.confidence * 100)}% ${detector === 'acf' ? 'ACF correlation' : 'pitch confidence'}` : status === 'listening' ? inputRms < minRms ? 'Below minimum level' : 'No stable single pitch' : 'Waiting for audio'}</span><div className={styles.signal}><span>INPUT RMS</span><div><span style={{ width: `${strength}%` }} /></div><span>{inputRms.toFixed(4)}</span></div></div>
             <div className={styles.bottomControls}>
               <div className={styles.algorithmRow}>
                 <label htmlFor="pitch-algorithm">ALGORITHM</label>
@@ -561,7 +561,7 @@ function App() {
             <div className={styles.stripValue}><span>SVARA / NOTE</span><strong>{ragaPitch?.label ?? swara?.name ?? '—'}</strong><small>{note?.name ?? '—'}</small></div>
             <div className={styles.stripValue}><span>OFFSET</span><strong>{swara ? `${cents > 0 ? '+' : ''}${cents}` : '—'}</strong><small>¢</small></div>
           </div>
-          {ragaWarning && selectedRaga && <div className={styles.ragaAlert} role="status">OUTSIDE {selectedRaga.name.toUpperCase()} · {ragaWarning.label} · {ragaWarning.frequency.toFixed(1)} Hz</div>}
+          {selectedRaga && <div className={`${styles.ragaAlert} ${ragaWarning ? styles.ragaAlertActive : ''}`} role="status">{ragaWarning ? `OUTSIDE ${selectedRaga.name.toUpperCase()} · ${ragaWarning.label} · ${ragaWarning.frequency.toFixed(1)} Hz` : `${selectedRaga.name.toUpperCase()} · SCALE CHECK ACTIVE`}</div>}
           <section className={styles.logCard}><div className={styles.visualHeading}><span className={styles.label}>RECENT PITCHES</span><span>SVARA · Hz · TIME</span></div><ol className={styles.logList}>{log.length ? log.map((item, index) => { const pitch = selectedRaga ? ragaPitchAtFrequency(item.frequency, saHz, selectedRaga) : null; return <li key={`${item.time}-${index}`} title={item.note}><strong>{pitch?.label ?? swaraForFrequency(item.frequency, saHz).name}</strong><span>{item.frequency.toFixed(1)}</span><span>{item.time}</span></li> }) : <li>Pitch events appear here as you sing or play.</li>}</ol></section>
         </div>
         </div>

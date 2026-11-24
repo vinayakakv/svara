@@ -32,8 +32,11 @@ export default function RagaPanel({ raga, onSelect, warning, events }: {
       <div className={styles.scale}><span>ASC</span><strong>{raga.ascending.join(' ')}</strong><span>DESC</span><strong>{raga.descending.join(' ')}</strong></div>
       <div className={styles.swaras}><span>IN SCALE</span><div>{raga.pitchClasses.map(semitone => <span className={styles.allowed} key={semitone}>{ragaSwaraAtClass(raga, semitone)}</span>)}</div></div>
       <div className={styles.swaras}><span>OUTSIDE</span><div>{Array.from({ length: 12 }, (_, i) => i).filter(semitone => !raga.pitchClasses.includes(semitone)).map(semitone => <span className={styles.excluded} key={semitone}>{SHORT_SWARAS[semitone]}</span>)}</div></div>
-      {warning && <div className={styles.warning} role="status">OUTSIDE {raga.name.toUpperCase()} · {warning.label} · {warning.frequency.toFixed(1)} Hz</div>}
-      {events.length > 0 && <div className={styles.events}><span>RECENT OUTSIDE NOTES</span>{events.slice(0, 3).map((event, index) => <div key={`${event.time}-${index}`}><strong>{event.label}</strong><span>{event.frequency.toFixed(1)} Hz</span><time>{event.time}</time></div>)}</div>}
+      <div className={styles.activity}>
+        {warning ? <div className={styles.warning} role="status">OUTSIDE {raga.name.toUpperCase()} · {warning.label} · {warning.frequency.toFixed(1)} Hz</div>
+          : events.length > 0 ? <div className={styles.events}><span>RECENT OUTSIDE NOTES</span>{events.slice(0, 3).map((event, index) => <div key={`${event.time}-${index}`}><strong>{event.label}</strong><span>{event.frequency.toFixed(1)} Hz</span><time>{event.time}</time></div>)}</div>
+            : <div className={styles.events}>No outside notes yet.</div>}
+      </div>
       <p className={styles.note}>Checks sustained equal-tempered pitch positions only. Brief gamaka crossings are ignored; a scale alone does not define every allowed raga phrase.</p>
     </> : <p className={styles.note}>Choose a raga to mark pitches outside its scale while listening.</p>}
   </section>
