@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { analysisWindowSize, noteForFrequency, swaraForFrequency, type PitchMethod, type PitchResult } from './audio/pitch'
 import PitchContour, { type PitchPoint } from './PitchContour'
 import TanpuraPanel from './TanpuraPanel'
+import RagaPanel, { type RagaEvent } from './RagaPanel'
+import { RAGAS, ragaPitchAtFrequency } from './music/ragas'
 import styles from './App.module.css'
 
 type Reading = PitchResult
@@ -94,7 +96,23 @@ function App() {
   const [saHz, setSaHz] = useState(261.63)
   const [saDraft, setSaDraft] = useState('261.63')
   const [saOctave, setSaOctave] = useState(4)
-  const [minRms, setMinRms] = useState(0.003)
+  const [selectedRagaId, setSelectedRagaId] = useState(() => window.localStorage.getItem('svara-raga') ?? '')
+  const selectedRaga = RAGAS.find(raga => raga.id === selectedRagaId) ?? null
+  const ragaRef = useRef(selectedRaga)
+  ragaRef.current = selectedRaga
+  const saHzRef = useRef(saHz)
+  saHzRef.current = saHz
+  const outsideCandidateRef = useRef<{ semitone: number; since: number; announced: boolean } | null>(null)
+  const lastRagaEventRef = useRef<{ semitone: number; at: number } | null>(null)
+  const [ragaWarning, setRagaWarning] = useState<RagaEvent | null>(null)
+  const [ragaEvents, setRagaEvents] = useState<RagaEvent[]>([])
+  const [minRms, setMinRms] = useState(0.001)
+  const [browserAutoGain, setBrowserAutoGain] = useState(() => window.localStorage.getItem('svara-browser-auto-gain') !== 'false')
+  const [micGain, setMicGain] = useState(() => {
+    const saved = Number(window.localStorage.getItem('svara-mic-gain'))
+    return Number.isFinite(saved) && saved >= 1 && saved <= 16 ? saved : /Android/i.test(navigator.userAgent) ? 4 : 1
+  })
+  const [actualAutoGain, setActualAutoGain] = useState<boolean | null>(null)
   const [yinThreshold, setYinThreshold] = useState(0.12)
   const [acfThreshold, setAcfThreshold] = useState(0.5)
   const [essentiaConfidence, setEssentiaConfidence] = useState(0.65)
@@ -119,6 +137,9 @@ function App() {
   const holdTrailRef = useRef(false)
   holdTrailRef.current = holdTrail
   const contextRef = useRef<AudioContext | null>(null)
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null)
+  const wakeLockPendingRef = useRef(false)
+  const micGainNodeRef = useRef<GainNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const fileSourceRef = useRef<AudioBufferSourceNode | null>(null)
   const frameRef = useRef<number | null>(null)
@@ -133,8 +154,22 @@ function App() {
   const recentRef = useRef<number[]>([])
   const missingRef = useRef(0)
 
+  const requestWakeLock = useCallback(async () => {
+    if (!navigator.wakeLock || document.visibilityState !== 'visible' || wakeLockRef.current || wakeLockPendingRef.current) return
+    wakeLockPendingRef.current = true
+    try {
+      const sentinel = await navigator.wakeLock.request('screen')
+      if (!contextRef.current) { void sentinel.release(); return }
+      wakeLockRef.current = sentinel
+      sentinel.addEventListener('release', () => { if (wakeLockRef.current === sentinel) wakeLockRef.current = null })
+    } catch { /* Browser or system may deny the wake lock. */ }
+    finally { wakeLockPendingRef.current = false }
+  }, [])
+
   const stop = useCallback(() => {
     startGenerationRef.current++
+    if (wakeLockRef.current) void wakeLockRef.current.release()
+    wakeLockRef.current = null
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
     frameRef.current = null
     workerRef.current?.terminate()
@@ -150,10 +185,12 @@ function App() {
     }
     if (contextRef.current) void contextRef.current.close()
     contextRef.current = null
+    micGainNodeRef.current = null
     recentRef.current = []
     missingRef.current = 0
     lastLoggedNoteRef.current = ''
     setInputRate(null)
+    setActualAutoGain(null)
     setInputRms(0)
     setReading(null)
     setStatus('idle')
@@ -166,6 +203,23 @@ function App() {
   }, [theme])
 
   useEffect(() => { window.localStorage.setItem('svara-sample-rate', String(requestedRate)) }, [requestedRate])
+  useEffect(() => { window.localStorage.setItem('svara-mic-gain', String(micGain)) }, [micGain])
+  useEffect(() => { window.localStorage.setItem('svara-browser-auto-gain', String(browserAutoGain)) }, [browserAutoGain])
+  useEffect(() => {
+    const node = micGainNodeRef.current
+    if (node) node.gain.setTargetAtTime(micGain, node.context.currentTime, .025)
+  }, [micGain])
+  useEffect(() => { window.localStorage.setItem('svara-raga', selectedRagaId) }, [selectedRagaId])
+
+  useEffect(() => {
+    const resumeVisibleAudio = () => {
+      if (document.visibilityState !== 'visible' || !contextRef.current) return
+      if (contextRef.current.state === 'suspended') void contextRef.current.resume().catch(() => {})
+      void requestWakeLock()
+    }
+    document.addEventListener('visibilitychange', resumeVisibleAudio)
+    return () => document.removeEventListener('visibilitychange', resumeVisibleAudio)
+  }, [requestWakeLock])
 
   useEffect(() => () => {
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
@@ -176,6 +230,7 @@ function App() {
       try { fileSourceRef.current.stop() } catch { /* Already ended. */ }
     }
     if (contextRef.current) void contextRef.current.close()
+    if (wakeLockRef.current) void wakeLockRef.current.release()
   }, [])
 
   useEffect(() => {
@@ -191,7 +246,9 @@ function App() {
     const generation = ++startGenerationRef.current
     setError('')
     if (sourceMode === 'mic' && !navigator.mediaDevices?.getUserMedia) {
-      setError('Microphone access needs a supported browser on localhost or HTTPS.')
+      setError(window.isSecureContext
+        ? 'This browser does not expose microphone access. Check its app and site microphone permissions.'
+        : 'Microphone access needs HTTPS on a phone. A local network HTTP address is blocked by most browsers.')
       setStatus('error')
       return
     }
@@ -204,12 +261,16 @@ function App() {
       setStatus('starting')
       setTrail([])
       setLog([])
+      setRagaWarning(null)
+      setRagaEvents([])
+      outsideCandidateRef.current = null
+      lastRagaEventRef.current = null
       setHoldTrail(false)
       holdTrailRef.current = false
       setTrailNow(performance.now())
       let stream: MediaStream | null = null
       if (sourceMode === 'mic') {
-        const audioConstraints: MediaTrackConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        const audioConstraints: MediaTrackConstraints = { echoCancellation: false, noiseSuppression: false, autoGainControl: browserAutoGain }
         if (requestedRate !== 'auto' && navigator.mediaDevices.getSupportedConstraints?.().sampleRate) audioConstraints.sampleRate = { ideal: requestedRate }
         stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints, video: false })
         if (generation !== startGenerationRef.current) {
@@ -218,6 +279,7 @@ function App() {
         }
         streamRef.current = stream
         setInputRate(stream.getAudioTracks()[0]?.getSettings().sampleRate ?? null)
+        setActualAutoGain(stream.getAudioTracks()[0]?.getSettings().autoGainControl ?? null)
       }
       const context = new AudioContext(requestedRate === 'auto' ? undefined : { sampleRate: requestedRate })
       contextRef.current = context
@@ -250,7 +312,13 @@ function App() {
       analyser.smoothingTimeConstant = .72
       analyser.minDecibels = -100
       analyser.maxDecibels = -30
-      source.connect(analyser)
+      if (stream) {
+        const gain = context.createGain()
+        gain.gain.value = micGain
+        micGainNodeRef.current = gain
+        source.connect(gain)
+        gain.connect(analyser)
+      } else source.connect(analyser)
       const samples = new Float32Array(analyser.fftSize)
       const spectrum = new Uint8Array(analyser.frequencyBinCount)
       const worker = new Worker(new URL('./audio/pitch.worker.ts', import.meta.url), { type: 'module' })
@@ -280,8 +348,35 @@ function App() {
           const sorted = [...recent].sort((a, b) => a - b)
           const frequency = sorted[Math.floor(sorted.length / 2)]
           setReading({ ...detected, frequency })
+          const activeRaga = ragaRef.current
+          const ragaPitch = activeRaga ? ragaPitchAtFrequency(frequency, saHzRef.current, activeRaga) : null
+          let outside = false
+          if (ragaPitch && !ragaPitch.allowed && Math.abs(ragaPitch.cents) <= 30) {
+            let candidate = outsideCandidateRef.current
+            if (!candidate || candidate.semitone !== ragaPitch.semitone) {
+              candidate = { semitone: ragaPitch.semitone, since: at, announced: false }
+              outsideCandidateRef.current = candidate
+              setRagaWarning(null)
+            }
+            if (at - candidate.since >= 220) {
+              outside = true
+              if (!candidate.announced) {
+                candidate.announced = true
+                const event = { label: ragaPitch.label, frequency, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
+                setRagaWarning(event)
+                const last = lastRagaEventRef.current
+                if (!last || last.semitone !== ragaPitch.semitone || at - last.at >= 3000) {
+                  setRagaEvents(previous => [event, ...previous].slice(0, 6))
+                  lastRagaEventRef.current = { semitone: ragaPitch.semitone, at }
+                }
+              }
+            }
+          } else {
+            outsideCandidateRef.current = null
+            setRagaWarning(null)
+          }
           if (!holdTrailRef.current) {
-            setTrail(previous => [...previous.filter(point => at - point.at <= 30000), { at, frequency }])
+            setTrail(previous => [...previous.filter(point => at - point.at <= 30000), { at, frequency, outside }])
             setTrailNow(at)
           }
           const noteName = noteForFrequency(frequency).name
@@ -294,6 +389,7 @@ function App() {
           recentRef.current = []
           if (missingRef.current >= 3) setReading(null)
           if (missingRef.current >= 3) lastLoggedNoteRef.current = ''
+          if (missingRef.current >= 3) { outsideCandidateRef.current = null; setRagaWarning(null) }
           if (!holdTrailRef.current) {
             setTrail(previous => [...previous.filter(point => at - point.at <= 30000), { at, frequency: null }])
             setTrailNow(at)
@@ -306,6 +402,7 @@ function App() {
         setStatus('error')
       }
       setStatus('listening')
+      void requestWakeLock()
       const tick = (time: number) => {
         if (time - lastDrawRef.current >= 33) {
           analyser.getFloatTimeDomainData(samples)
@@ -343,7 +440,9 @@ function App() {
         : cause instanceof DOMException && cause.name === 'NotAllowedError'
         ? cause.message.toLowerCase().includes('system')
           ? 'macOS blocked the microphone. Enable Chrome in System Settings → Privacy & Security → Microphone, then try again.'
-          : 'Microphone permission was denied. Allow access in your browser and try again.'
+          : /Android/i.test(navigator.userAgent)
+            ? 'Microphone permission was denied. Check both the browser app permission in Android settings and this site’s microphone permission, then try again.'
+            : 'Microphone permission was denied. Allow access in your browser and try again.'
         : cause instanceof DOMException && cause.name === 'NotSupportedError'
           ? 'That analysis sample rate is not supported by this browser. Try Auto or 48 kHz.'
         : 'Could not start the microphone. Check that an input device is connected.')
@@ -353,8 +452,9 @@ function App() {
 
   const note = reading ? noteForFrequency(reading.frequency) : null
   const swara = reading ? swaraForFrequency(reading.frequency, saHz) : null
+  const ragaPitch = reading && selectedRaga ? ragaPitchAtFrequency(reading.frequency, saHz, selectedRaga) : null
   const cents = swara?.cents ?? 0
-  const strength = Math.min(100, Math.round(inputRms * 600))
+  const strength = Math.min(100, Math.round(inputRms * 4000))
   const setSaReference = (frequency: number) => {
     setSaHz(frequency)
     setSaDraft(frequency.toFixed(2))
@@ -379,6 +479,15 @@ function App() {
     lastLoggedNoteRef.current = ''
     setTrail([])
     setLog([])
+  }
+  const selectRaga = (id: string) => {
+    setSelectedRagaId(id)
+    ragaRef.current = RAGAS.find(raga => raga.id === id) ?? null
+    outsideCandidateRef.current = null
+    lastRagaEventRef.current = null
+    setRagaWarning(null)
+    setRagaEvents([])
+    setTrail([])
   }
 
   return (
@@ -405,7 +514,7 @@ function App() {
               <div className={styles.tunerTrack}><div className={styles.tunerZone} /><div className={styles.tunerCenter} /><div className={styles.tunerNeedle} style={{ left: `${50 + cents}%`, opacity: reading ? 1 : .28 }} /></div>
               <div className={styles.tunerTicks}><span>−50</span><span>0</span><span>+50</span></div>
             </div>
-            <div className={styles.pitchMeta}><span>{reading ? `${Math.round(reading.confidence * 100)}% ${detector === 'acf' ? 'ACF correlation' : 'pitch confidence'}` : status === 'listening' ? inputRms < minRms ? 'Input below minimum level' : 'Audio present · no stable single pitch' : 'Waiting for audio'}</span><div className={styles.signal}><span>INPUT RMS</span><div><span style={{ width: `${strength}%` }} /></div><span>{inputRms.toFixed(3)}</span></div></div>
+            <div className={styles.pitchMeta}><span>{reading ? `${Math.round(reading.confidence * 100)}% ${detector === 'acf' ? 'ACF correlation' : 'pitch confidence'}` : status === 'listening' ? inputRms < minRms ? 'Input below minimum level' : 'Audio present · no stable single pitch' : 'Waiting for audio'}</span><div className={styles.signal}><span>INPUT RMS</span><div><span style={{ width: `${strength}%` }} /></div><span>{inputRms.toFixed(4)}</span></div></div>
             <div className={styles.bottomControls}>
               <div className={styles.algorithmRow}>
                 <label htmlFor="pitch-algorithm">ALGORITHM</label>
@@ -424,12 +533,16 @@ function App() {
             </div>
           </section>
 
+          <RagaPanel raga={selectedRaga} onSelect={selectRaga} warning={ragaWarning} events={ragaEvents} />
+
           {showScopes && <div className={styles.visualStack}>
             <section className={styles.visualCard}><div className={styles.visualHeading}><span className={styles.label}>WAVEFORM</span><span>AMPLITUDE / TIME</span></div><div className={styles.plot}><div className={`${styles.yTicks} ${styles.axisLabels}`}><span>+1</span><span>0</span><span>−1</span></div><div className={styles.canvasWrap}><canvas ref={waveRef} aria-label="Live amplitude waveform over time" /></div><div className={`${styles.xTicks} ${styles.axisLabels}`}><span>0</span><span>{Math.round(windowSize / 2 / sampleRate * 1000)} ms</span><span>{Math.round(windowSize / sampleRate * 1000)} ms</span></div></div></section>
             <section className={styles.visualCard}><div className={styles.visualHeading}><span className={styles.label}>SPECTRUM</span><span>dB / Hz</span></div><div className={styles.plot}><div className={`${styles.yTicks} ${styles.axisLabels}`}><span>−30</span><span>−65</span><span>−100</span></div><div className={styles.canvasWrap}><canvas ref={spectrumRef} aria-label="Live spectrum level in decibels by frequency" /></div><div className={`${styles.xTicks} ${styles.spectrumTicks} ${styles.axisLabels}`}><span>60</span><span>300</span><span>1k</span><span>3k</span></div></div></section>
           </div>}
         <details className={styles.settings}><summary>DETECTION SETTINGS · {status === 'listening' ? `${sourceMode === 'file' ? 'file' : 'mic'} ${inputRate ? `${(inputRate / 1000).toFixed(1)} kHz` : 'rate unknown'} / analysis ${(sampleRate / 1000).toFixed(1)} kHz` : 'sample rate, threshold and range'}</summary><div className={styles.settingsGrid}>
-          <label className={styles.settingField}>Minimum level <output>{minRms.toFixed(4)} RMS</output><input type="range" min="0.0005" max="0.05" step="0.0005" value={minRms} onChange={event => setMinRms(Number(event.target.value))} /></label>
+          <label className={styles.settingField}>Minimum level <output>{minRms.toFixed(4)} RMS</output><input type="range" min="0.0001" max="0.05" step="0.0001" value={minRms} onChange={event => setMinRms(Number(event.target.value))} /></label>
+          <label className={styles.settingField}>Mic input gain <output>{micGain}×</output><input aria-label="Mic input gain" type="range" min="1" max="16" step="1" value={micGain} onChange={event => setMicGain(Number(event.target.value))} /><small>Applies live to the mic before pitch analysis; also raises background noise.</small></label>
+          <label className={styles.settingField}>Browser auto gain <input aria-label="Browser auto gain" type="checkbox" checked={browserAutoGain} disabled={status === 'listening' || status === 'starting'} onChange={event => setBrowserAutoGain(event.target.checked)} /><small>{status === 'listening' && sourceMode === 'mic' ? `Browser reports ${actualAutoGain === null ? 'unknown' : actualAutoGain ? 'on' : 'off'}. ` : ''}Restart listening to apply.</small></label>
           <label className={styles.settingField}>YIN threshold <output>{yinThreshold.toFixed(2)}</output><input type="range" min="0.06" max="0.25" step="0.01" value={yinThreshold} onChange={event => setYinThreshold(Number(event.target.value))} /></label>
           <label className={styles.settingField}>Autocorrelation minimum <output>{acfThreshold.toFixed(2)}</output><input type="range" min="0.2" max="0.9" step="0.05" value={acfThreshold} onChange={event => setAcfThreshold(Number(event.target.value))} /></label>
           <label className={styles.settingField}>Essentia minimum confidence <output>{essentiaConfidence.toFixed(2)}</output><input type="range" min="0" max="0.95" step="0.05" value={essentiaConfidence} onChange={event => setEssentiaConfidence(Number(event.target.value))} /></label>
@@ -441,14 +554,15 @@ function App() {
         <div className={styles.historyGrid}>
           <section className={styles.trailCard}>
             <div className={styles.contourHeader}><div><span className={styles.label}>SVARA PITCH CONTOUR</span><p>Fixed two-octave scale relative to Sa · use the arrows to shift octaves</p></div><div className={styles.contourControls}><div className={styles.zoomControls} aria-label="Pitch chart time window">{[8, 16, 30].map(seconds => <button key={seconds} aria-pressed={trailSeconds === seconds} onClick={() => setTrailSeconds(seconds)}>{seconds}s</button>)}</div><div className={styles.octaveControls} aria-label="Pitch chart octave"><button aria-label="Shift chart down one octave" onClick={() => setCenterSemi(value => value - 12)}>↓</button><button aria-label="Center chart on Sa" onClick={() => setCenterSemi(0)}>Sa</button><button aria-label="Shift chart up one octave" onClick={() => setCenterSemi(value => value + 12)}>↑</button></div><button className={styles.holdButton} aria-pressed={holdTrail} disabled={status !== 'listening'} onClick={() => setHoldTrail(value => !value)}>{holdTrail ? 'Resume' : 'Hold'}</button></div></div>
-            <PitchContour points={trail} now={trailNow} saHz={saHz} centerSemi={centerSemi} seconds={trailSeconds} />
+            <PitchContour points={trail} now={trailNow} saHz={saHz} centerSemi={centerSemi} seconds={trailSeconds} raga={selectedRaga} />
           </section>
           <div className={styles.pitchStrip} aria-label="Current pitch and tuning offset">
             <div className={styles.stripValue}><span>DETECTED PITCH</span><strong>{reading ? reading.frequency.toFixed(1) : '—'}</strong><small>Hz</small></div>
-            <div className={styles.stripValue}><span>SVARA / NOTE</span><strong>{swara?.name ?? '—'}</strong><small>{note?.name ?? '—'}</small></div>
+            <div className={styles.stripValue}><span>SVARA / NOTE</span><strong>{ragaPitch?.label ?? swara?.name ?? '—'}</strong><small>{note?.name ?? '—'}</small></div>
             <div className={styles.stripValue}><span>OFFSET</span><strong>{swara ? `${cents > 0 ? '+' : ''}${cents}` : '—'}</strong><small>¢</small></div>
           </div>
-          <section className={styles.logCard}><div className={styles.visualHeading}><span className={styles.label}>RECENT PITCHES</span><span>SVARA · Hz · TIME</span></div><ol className={styles.logList}>{log.length ? log.map((item, index) => <li key={`${item.time}-${index}`} title={item.note}><strong>{swaraForFrequency(item.frequency, saHz).name}</strong><span>{item.frequency.toFixed(1)}</span><span>{item.time}</span></li>) : <li>Pitch events appear here as you sing or play.</li>}</ol></section>
+          {ragaWarning && selectedRaga && <div className={styles.ragaAlert} role="status">OUTSIDE {selectedRaga.name.toUpperCase()} · {ragaWarning.label} · {ragaWarning.frequency.toFixed(1)} Hz</div>}
+          <section className={styles.logCard}><div className={styles.visualHeading}><span className={styles.label}>RECENT PITCHES</span><span>SVARA · Hz · TIME</span></div><ol className={styles.logList}>{log.length ? log.map((item, index) => { const pitch = selectedRaga ? ragaPitchAtFrequency(item.frequency, saHz, selectedRaga) : null; return <li key={`${item.time}-${index}`} title={item.note}><strong>{pitch?.label ?? swaraForFrequency(item.frequency, saHz).name}</strong><span>{item.frequency.toFixed(1)}</span><span>{item.time}</span></li> }) : <li>Pitch events appear here as you sing or play.</li>}</ol></section>
         </div>
         </div>
 

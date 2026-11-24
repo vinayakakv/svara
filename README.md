@@ -15,6 +15,12 @@ The input source and listening control are in the top bar. The pitch contour is 
 
 The bottom Tanpura panel plays a synthesized four-string drone through Web Audio. It follows the current reference Sa and lets you choose Pa, Ma, or Sa for the first string, the drone octave, volume, and pluck interval. The drone has its own audio context and is not fed into the detector; use headphones when using the microphone so speaker sound does not bleed back into the input.
 
+The raga guide includes the 72 Melakarta ragas and Mohanam and Hamsadhwani. Choose one to mark pitch positions outside its scale on the contour and in a short event list. It waits about 220 ms on a pitch within 30 cents of a scale position before warning, so brief gamaka crossings do not trigger. This is a pitch-set check, not a full raga grammar or raga identification system. The Melakarta names and swaras follow the [Swaraa and Thaalaa academy chart](https://swaraathaalaa.com/72melakartachart/) and the [Kerala music textbook](https://samagra.kite.kerala.gov.in/files/samagra-resource/uploads/tbookscmq/Class_XI/Music/Music.pdf); the two janya scales follow the [Kerala Class XII music textbook](https://samagra.kite.kerala.gov.in/files/samagra-resource/uploads/tbookscmq/Class_XII/Music/Music.pdf).
+
+For a quiet microphone, the detection settings include live input gain and browser automatic gain. Android starts at 4× input gain; other devices start at 1×. The minimum level defaults to 0.001 RMS. Raising input gain also raises room noise. Android browsers must have both app and site microphone permission, and a phone needs HTTPS or its own `localhost` to use the mic. For local phone testing over USB, `adb reverse tcp:5174 tcp:5174` exposes a local Vite server as `http://localhost:5174` on the phone.
+
+While listening, the app requests a screen wake lock when supported. If the browser suspends audio when the page becomes hidden, the app attempts to resume it when the page is visible again.
+
 ## Stack and signal path
 
 - **Bun + Vite + React + TypeScript** for a small, fast local app.
