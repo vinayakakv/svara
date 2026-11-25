@@ -15,6 +15,7 @@ type Props = {
   onViewChange: (centerSemi: number, rangeSemis: number) => void
   seconds: number
   raga: Raga | null
+  nowLabel?: string
 }
 
 const WIDTH = 900
@@ -28,11 +29,22 @@ function pitchY(semitones: number, center: number, range: number) {
 
 function clampRange(value: number) { return Math.max(12, Math.min(60, value)) }
 
+function firstPointAfter(points: PitchPoint[], time: number) {
+  let low = 0
+  let high = points.length
+  while (low < high) {
+    const middle = (low + high) >>> 1
+    if (points[middle].at <= time) low = middle + 1
+    else high = middle
+  }
+  return low
+}
+
 function formatHz(value: number) {
   return value < 100 ? value.toFixed(1) : Math.round(value).toString()
 }
 
-export default function PitchContour({ points, now, saHz, centerSemi, rangeSemis, onViewChange, seconds, raga }: Props) {
+export default function PitchContour({ points, now, saHz, centerSemi, rangeSemis, onViewChange, seconds, raga, nowLabel = 'Now' }: Props) {
   const [hover, setHover] = useState<PitchPoint | null>(null)
   const plotRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef({ centerSemi, rangeSemis, onViewChange })
@@ -49,11 +61,11 @@ export default function PitchContour({ points, now, saHz, centerSemi, rangeSemis
     if (rangeSemis > 28) return [0, 2, 5, 7, 9].includes(pitchClass)
     return LABELED_STEPS.has(pitchClass) || Boolean(raga?.pitchClasses.includes(pitchClass))
   })
-  const marked = useMemo(() => {
-    const outside = markOutsideTrail(points, raga, saHz)
-    return points.map((point, index) => ({ ...point, outside: outside[index] }))
-  }, [points, raga, saHz])
-  const visible = marked.filter(point => point.at >= start && point.at <= now)
+  const visible = useMemo(() => {
+    const candidates = points.slice(firstPointAfter(points, start - 300), firstPointAfter(points, now))
+    const outside = markOutsideTrail(candidates, raga, saHz)
+    return candidates.flatMap((point, index) => point.at >= start ? [{ ...point, outside: outside[index] }] : [])
+  }, [points, start, now, raga, saHz])
 
   const segments = useMemo(() => {
     const paths: { points: string; outside: boolean }[] = []
@@ -184,7 +196,7 @@ export default function PitchContour({ points, now, saHz, centerSemi, rangeSemis
         </svg>
         {hover && hoverSwara && <div className={styles.tooltip}>{hover.frequency?.toFixed(1)} Hz · {hoverRagaSwara ?? hoverSwara.name} {hoverSwara.cents >= 0 ? '+' : ''}{hoverSwara.cents}¢ · {((hover.at - now) / 1000).toFixed(1)}s</div>}
       </div>
-      <div className={styles.timeAxis}><span>−{seconds}s</span><span>−{seconds / 2}s</span><span>Now</span></div>
+      <div className={styles.timeAxis}><span>−{seconds}s</span><span>−{seconds / 2}s</span><span>{nowLabel}</span></div>
     </div>
   )
 }

@@ -3,8 +3,11 @@ import { analysisWindowSize, noteForFrequency, swaraForFrequency, type PitchMeth
 import PitchContour, { type PitchPoint } from './PitchContour'
 import TanpuraPanel from './TanpuraPanel'
 import RagaPanel, { type RagaEvent } from './RagaPanel'
+import SessionPanel from './SessionPanel'
 import { RAGAS, ragaPitchAtFrequency } from './music/ragas'
 import { clampPitchView, followPitchView, pitchViewBounds } from './music/pitchView'
+import { markOutsideTrail } from './music/ragaTrail'
+import { frameAtTime, frameIndexAtTime, type SessionData, type SessionFrame } from './audio/session'
 import styles from './App.module.css'
 
 type Reading = PitchResult
@@ -132,6 +135,16 @@ function App() {
   const lastLoggedNoteRef = useRef('')
   const [trail, setTrail] = useState<PitchPoint[]>([])
   const [trailNow, setTrailNow] = useState(() => performance.now())
+  const [session, setSession] = useState<SessionData | null>(null)
+  const [replayTimeMs, setReplayTimeMs] = useState(0)
+  const [replayPlaying, setReplayPlaying] = useState(false)
+  const [recordingSupported, setRecordingSupported] = useState(() => typeof MediaRecorder !== 'undefined')
+  const recorderRef = useRef<MediaRecorder | null>(null)
+  const recordedChunksRef = useRef<Blob[]>([])
+  const sessionFramesRef = useRef<SessionFrame[]>([])
+  const sessionStartAtRef = useRef(0)
+  const fileSessionRef = useRef<{ file: File; durationMs: number } | null>(null)
+  const fileCompletedRef = useRef(false)
   const [trailSeconds, setTrailSeconds] = useState(8)
   const [centerSemi, setCenterSemi] = useState(6)
   const [rangeSemis, setRangeSemis] = useState(36)
@@ -170,7 +183,36 @@ function App() {
   }, [])
 
   const stop = useCallback(() => {
-    startGenerationRef.current++
+    const generation = ++startGenerationRef.current
+    const context = contextRef.current
+    const recorder = recorderRef.current
+    recorderRef.current = null
+    const chunks = recordedChunksRef.current
+    const frames = [...sessionFramesRef.current]
+    const elapsedMs = Math.max(0, performance.now() - sessionStartAtRef.current)
+    const completedFile = fileCompletedRef.current ? fileSessionRef.current : null
+    fileSessionRef.current = null
+    fileCompletedRef.current = false
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.onstop = () => {
+        const audio = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' })
+        if (audio.size && startGenerationRef.current === generation) {
+          const extension = audio.type.includes('mp4') ? 'm4a' : 'webm'
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+          setSession({ audio, audioName: `svara-${stamp}.${extension}`, frames, durationMs: elapsedMs, source: 'mic' })
+          setReplayTimeMs(elapsedMs)
+        }
+        if (context) void context.close()
+      }
+      try { recorder.stop() } catch { if (context) void context.close() }
+    } else {
+      if (completedFile && startGenerationRef.current === generation) {
+        setSession({ audio: completedFile.file, audioName: completedFile.file.name, frames, durationMs: completedFile.durationMs, source: 'file' })
+        setReplayTimeMs(completedFile.durationMs)
+      }
+      if (context) void context.close()
+    }
+    setReplayPlaying(false)
     if (wakeLockRef.current) void wakeLockRef.current.release()
     wakeLockRef.current = null
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
@@ -186,7 +228,6 @@ function App() {
       fileSourceRef.current.disconnect()
       fileSourceRef.current = null
     }
-    if (contextRef.current) void contextRef.current.close()
     contextRef.current = null
     micGainNodeRef.current = null
     recentRef.current = []
@@ -241,6 +282,10 @@ function App() {
   useEffect(() => () => {
     if (frameRef.current !== null) cancelAnimationFrame(frameRef.current)
     workerRef.current?.terminate()
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.onstop = null
+      recorderRef.current.stop()
+    }
     streamRef.current?.getTracks().forEach(track => track.stop())
     if (fileSourceRef.current) {
       fileSourceRef.current.onended = null
@@ -276,6 +321,13 @@ function App() {
     }
     try {
       setStatus('starting')
+      setSession(null)
+      setReplayPlaying(false)
+      setReplayTimeMs(0)
+      sessionFramesRef.current = []
+      recordedChunksRef.current = []
+      fileSessionRef.current = null
+      fileCompletedRef.current = false
       setTrail([])
       setLog([])
       setRagaWarning(null)
@@ -313,6 +365,7 @@ function App() {
         playback.buffer = buffer
         playback.connect(context.destination)
         fileSourceRef.current = playback
+        fileSessionRef.current = { file: audioFile!, durationMs: buffer.duration * 1000 }
         source = playback
       }
       await context.resume()
@@ -335,6 +388,20 @@ function App() {
         micGainNodeRef.current = gain
         source.connect(gain)
         gain.connect(analyser)
+        if (typeof MediaRecorder !== 'undefined') {
+          try {
+            const recordingOutput = context.createMediaStreamDestination()
+            source.connect(recordingOutput)
+            const mimeType = ['audio/webm;codecs=opus', 'audio/mp4', 'audio/webm'].find(type => MediaRecorder.isTypeSupported(type))
+            const recorder = new MediaRecorder(recordingOutput.stream, mimeType ? { mimeType } : undefined)
+            const chunks: Blob[] = []
+            recordedChunksRef.current = chunks
+            recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data) }
+            recorder.onerror = () => setRecordingSupported(false)
+            recorderRef.current = recorder
+            setRecordingSupported(true)
+          } catch { setRecordingSupported(false) }
+        }
       } else source.connect(analyser)
       const samples = new Float32Array(analyser.fftSize)
       const spectrum = new Uint8Array(analyser.frequencyBinCount)
@@ -344,6 +411,9 @@ function App() {
       lastSampleRef.current = 0
       lastDrawRef.current = 0
       lastLevelRef.current = 0
+      sessionStartAtRef.current = performance.now()
+      try { recorderRef.current?.start(1000) }
+      catch { recorderRef.current = null; setRecordingSupported(false) }
       worker.onmessage = ({ data }: MessageEvent<{ detector: Detector; reading?: Reading; error?: string }>) => {
         if (generation !== startGenerationRef.current) return
         workerBusyRef.current = false
@@ -364,6 +434,7 @@ function App() {
           if (recent.length > 3) recent.shift()
           const sorted = [...recent].sort((a, b) => a - b)
           const frequency = sorted[Math.floor(sorted.length / 2)]
+          sessionFramesRef.current.push({ at: at - sessionStartAtRef.current, frequency, confidence: detected.confidence, rms: detected.rms, method: data.detector })
           setReading({ ...detected, frequency })
           const activeRaga = ragaRef.current
           const ragaPitch = activeRaga ? ragaPitchAtFrequency(frequency, saHzRef.current, activeRaga) : null
@@ -400,6 +471,7 @@ function App() {
             setLog(previous => [{ note: noteName, frequency, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }, ...previous].slice(0, 6))
           }
         } else {
+          sessionFramesRef.current.push({ at: at - sessionStartAtRef.current, frequency: null, confidence: null, rms: null, method: data.detector })
           missingRef.current++
           recentRef.current = []
           if (missingRef.current >= 3) setReading(null)
@@ -446,7 +518,7 @@ function App() {
       frameRef.current = requestAnimationFrame(tick)
       stream?.getAudioTracks()[0]?.addEventListener('ended', stop, { once: true })
       if (playback) {
-        playback.onended = stop
+        playback.onended = () => { fileCompletedRef.current = true; stop() }
         playback.start()
       }
     } catch (cause) {
@@ -465,11 +537,32 @@ function App() {
     }
   }
 
-  const note = reading ? noteForFrequency(reading.frequency) : null
-  const swara = reading ? swaraForFrequency(reading.frequency, saHz) : null
-  const ragaPitch = reading && selectedRaga ? ragaPitchAtFrequency(reading.frequency, saHz, selectedRaga) : null
+  const replayFrame = session ? frameAtTime(session.frames, replayTimeMs) : null
+  const displayReading: Reading = session
+    ? replayFrame?.frequency ? { frequency: replayFrame.frequency, confidence: replayFrame.confidence ?? 0, rms: replayFrame.rms ?? 0, method: replayFrame.method ?? detector } : null
+    : reading
+  const displayRms = session ? replayFrame?.rms ?? 0 : inputRms
+  const note = displayReading ? noteForFrequency(displayReading.frequency) : null
+  const swara = displayReading ? swaraForFrequency(displayReading.frequency, saHz) : null
+  const ragaPitch = displayReading && selectedRaga ? ragaPitchAtFrequency(displayReading.frequency, saHz, selectedRaga) : null
+  const replayFrameIndex = session ? frameIndexAtTime(session.frames, replayTimeMs) : -1
+  const replayOutside = session && selectedRaga && replayFrameIndex >= 0
+    ? markOutsideTrail(session.frames.slice(Math.max(0, replayFrameIndex - 10), replayFrameIndex + 1), selectedRaga, saHz).at(-1) ?? false
+    : false
+  const replayWarning: RagaEvent | null = replayOutside && replayFrame?.frequency && ragaPitch
+    ? { label: ragaPitch.label, frequency: replayFrame.frequency, time: `${(replayFrame.at / 1000).toFixed(1)}s` }
+    : null
+  const activeRagaWarning = session ? replayWarning : ragaWarning
   const cents = swara?.cents ?? 0
-  const strength = Math.min(100, Math.round(inputRms * 4000))
+  const strength = Math.min(100, Math.round(displayRms * 4000))
+
+  useEffect(() => {
+    if (!session || !replayPlaying || !autoFollow || !displayReading) return
+    setCenterSemi(current => {
+      const view = clampPitchView(current, rangeSemis, minHz, maxHz, saHz)
+      return followPitchView(view, displayReading.frequency, minHz, maxHz, saHz).center
+    })
+  }, [session, replayPlaying, autoFollow, replayFrame, rangeSemis, minHz, maxHz, saHz])
   const pitchView = clampPitchView(centerSemi, rangeSemis, minHz, maxHz, saHz)
   const bounds = pitchViewBounds(minHz, maxHz, saHz)
   const maxViewRange = Math.min(60, bounds.upper - bounds.lower)
@@ -531,13 +624,13 @@ function App() {
         <div className={styles.dashboard}>
         <div className={`${styles.workspace} ${!showScopes ? styles.workspaceSolo : ''}`}>
           <section className={styles.pitchCard} aria-label="Detection controls">
-            <div className={styles.cardTop}><span className={styles.label}>DETECTION CONTROLS</span><div className={styles.cardActions}><span className={styles.inputTag}>{sourceMode === 'file' ? 'FILE INPUT' : 'MIC INPUT'}</span><button className={styles.scopeToggle} type="button" aria-expanded={showScopes} onClick={() => setShowScopes(value => !value)}>{showScopes ? 'Hide scopes' : 'Show scopes'}</button></div></div>
+            <div className={styles.cardTop}><span className={styles.label}>DETECTION CONTROLS</span><div className={styles.cardActions}><span className={styles.inputTag}>{session ? 'REPLAY' : sourceMode === 'file' ? 'FILE INPUT' : 'MIC INPUT'}</span><button className={styles.scopeToggle} type="button" aria-expanded={showScopes} onClick={() => setShowScopes(value => !value)}>{showScopes ? 'Hide scopes' : 'Show scopes'}</button></div></div>
             <div className={styles.tuner}>
               <div className={styles.tunerLabels}><span>♭ FLAT</span><span>{swara ? `${cents > 0 ? '+' : ''}${cents} ¢` : 'IN TUNE'}</span><span>SHARP ♯</span></div>
-              <div className={styles.tunerTrack}><div className={styles.tunerZone} /><div className={styles.tunerCenter} /><div className={styles.tunerNeedle} style={{ left: `${50 + cents}%`, opacity: reading ? 1 : .28 }} /></div>
+              <div className={styles.tunerTrack}><div className={styles.tunerZone} /><div className={styles.tunerCenter} /><div className={styles.tunerNeedle} style={{ left: `${50 + cents}%`, opacity: displayReading ? 1 : .28 }} /></div>
               <div className={styles.tunerTicks}><span>−50</span><span>0</span><span>+50</span></div>
             </div>
-            <div className={styles.pitchMeta}><span>{reading ? `${Math.round(reading.confidence * 100)}% ${detector === 'acf' ? 'ACF correlation' : 'pitch confidence'}` : status === 'listening' ? inputRms < minRms ? 'Below minimum level' : 'No stable single pitch' : 'Waiting for audio'}</span><div className={styles.signal}><span>INPUT RMS</span><div><span style={{ width: `${strength}%` }} /></div><span>{inputRms.toFixed(4)}</span></div></div>
+            <div className={styles.pitchMeta}><span>{displayReading ? `${Math.round(displayReading.confidence * 100)}% ${displayReading.method === 'acf' ? 'ACF correlation' : 'pitch confidence'}` : session ? 'No pitch at playhead' : status === 'listening' ? inputRms < minRms ? 'Below minimum level' : 'No stable single pitch' : 'Waiting for audio'}</span><div className={styles.signal}><span>{session ? 'FRAME RMS' : 'INPUT RMS'}</span><div><span style={{ width: `${strength}%` }} /></div><span>{displayRms.toFixed(4)}</span></div></div>
             <div className={styles.bottomControls}>
               <div className={styles.algorithmRow}>
                 <label htmlFor="pitch-algorithm">ALGORITHM</label>
@@ -556,7 +649,7 @@ function App() {
             </div>
           </section>
 
-          <RagaPanel raga={selectedRaga} onSelect={selectRaga} warning={ragaWarning} events={ragaEvents} />
+          <RagaPanel raga={selectedRaga} onSelect={selectRaga} warning={activeRagaWarning} events={session ? [] : ragaEvents} />
 
           {showScopes && <div className={styles.visualStack}>
             <section className={styles.visualCard}><div className={styles.visualHeading}><span className={styles.label}>WAVEFORM</span><span>AMPLITUDE / TIME</span></div><div className={styles.plot}><div className={`${styles.yTicks} ${styles.axisLabels}`}><span>+1</span><span>0</span><span>−1</span></div><div className={styles.canvasWrap}><canvas ref={waveRef} aria-label="Live amplitude waveform over time" /></div><div className={`${styles.xTicks} ${styles.axisLabels}`}><span>0</span><span>{Math.round(windowSize / 2 / sampleRate * 1000)} ms</span><span>{Math.round(windowSize / sampleRate * 1000)} ms</span></div></div></section>
@@ -594,14 +687,15 @@ function App() {
                 <button className={styles.holdButton} aria-pressed={holdTrail} disabled={status !== 'listening'} onClick={() => setHoldTrail(value => !value)}>{holdTrail ? 'Resume' : 'Hold'}</button>
               </div>
             </div>
-            <PitchContour points={trail} now={trailNow} saHz={saHz} centerSemi={pitchView.center} rangeSemis={pitchView.range} onViewChange={changePitchView} seconds={trailSeconds} raga={selectedRaga} />
+            <PitchContour points={session ? session.frames : trail} now={session ? replayTimeMs : trailNow} saHz={saHz} centerSemi={pitchView.center} rangeSemis={pitchView.range} onViewChange={changePitchView} seconds={trailSeconds} raga={selectedRaga} nowLabel={session ? 'Playhead' : 'Now'} />
           </section>
           <div className={styles.pitchStrip} aria-label="Current pitch and tuning offset">
-            <div className={styles.stripValue}><span>DETECTED PITCH</span><strong>{reading ? reading.frequency.toFixed(1) : '—'}</strong><small>Hz</small></div>
+            <div className={styles.stripValue}><span>DETECTED PITCH</span><strong>{displayReading ? displayReading.frequency.toFixed(1) : '—'}</strong><small>Hz</small></div>
             <div className={styles.stripValue}><span>SVARA / NOTE</span><strong>{ragaPitch?.label ?? swara?.name ?? '—'}</strong><small>{note?.name ?? '—'}</small></div>
             <div className={styles.stripValue}><span>OFFSET</span><strong>{swara ? `${cents > 0 ? '+' : ''}${cents}` : '—'}</strong><small>¢</small></div>
           </div>
-          {selectedRaga && <div className={`${styles.ragaAlert} ${ragaWarning ? styles.ragaAlertActive : ''}`} role="status">{ragaWarning ? `OUTSIDE ${selectedRaga.name.toUpperCase()} · ${ragaWarning.label} · ${ragaWarning.frequency.toFixed(1)} Hz` : `${selectedRaga.name.toUpperCase()} · SCALE CHECK ACTIVE`}</div>}
+          <SessionPanel session={session} recording={status === 'listening' && sourceMode === 'mic' && recorderRef.current !== null} analyzing={status === 'listening' && sourceMode === 'file'} recordingSupported={recordingSupported} positionMs={replayTimeMs} playing={replayPlaying} onPosition={setReplayTimeMs} onPlaying={setReplayPlaying} saHz={saHz} raga={selectedRaga} />
+          {selectedRaga && <div className={`${styles.ragaAlert} ${activeRagaWarning ? styles.ragaAlertActive : ''}`} role="status">{activeRagaWarning ? `OUTSIDE ${selectedRaga.name.toUpperCase()} · ${activeRagaWarning.label} · ${activeRagaWarning.frequency.toFixed(1)} Hz` : `${selectedRaga.name.toUpperCase()} · SCALE CHECK ACTIVE`}</div>}
           <details className={styles.logCard} aria-label="Recent pitches"><summary className={styles.visualHeading}><span className={styles.label}>RECENT PITCHES</span><span>{log.length} RECENT <span className={styles.logChevron}>⌄</span></span></summary><ol className={styles.logList}>{log.length ? log.map((item, index) => { const pitch = selectedRaga ? ragaPitchAtFrequency(item.frequency, saHz, selectedRaga) : null; return <li key={`${item.time}-${index}`} title={item.note}><strong>{pitch?.label ?? swaraForFrequency(item.frequency, saHz).name}</strong><span>{item.frequency.toFixed(1)}</span><span>{item.time}</span></li> }) : <li>Pitch events appear here as you sing or play.</li>}</ol></details>
         </div>
         </div>
