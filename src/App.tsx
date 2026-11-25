@@ -132,7 +132,8 @@ function App() {
   const [trail, setTrail] = useState<PitchPoint[]>([])
   const [trailNow, setTrailNow] = useState(() => performance.now())
   const [trailSeconds, setTrailSeconds] = useState(8)
-  const [centerSemi, setCenterSemi] = useState(0)
+  const [centerSemi, setCenterSemi] = useState(6)
+  const [rangeSemis, setRangeSemis] = useState(36)
   const [holdTrail, setHoldTrail] = useState(false)
   const holdTrailRef = useRef(false)
   holdTrailRef.current = holdTrail
@@ -553,8 +554,8 @@ function App() {
         </div>
         <div className={styles.historyGrid}>
           <section className={styles.trailCard}>
-            <div className={styles.contourHeader}><div><span className={styles.label}>SVARA PITCH CONTOUR</span><p>Fixed two-octave scale relative to Sa · use the arrows to shift octaves</p></div><div className={styles.contourControls}><div className={styles.zoomControls} aria-label="Pitch chart time window">{[8, 16, 30].map(seconds => <button key={seconds} aria-pressed={trailSeconds === seconds} onClick={() => setTrailSeconds(seconds)}>{seconds}s</button>)}</div><div className={styles.octaveControls} aria-label="Pitch chart octave"><button aria-label="Shift chart down one octave" onClick={() => setCenterSemi(value => value - 12)}>↓</button><button aria-label="Center chart on Sa" onClick={() => setCenterSemi(0)}>Sa</button><button aria-label="Shift chart up one octave" onClick={() => setCenterSemi(value => value + 12)}>↑</button></div><button className={styles.holdButton} aria-pressed={holdTrail} disabled={status !== 'listening'} onClick={() => setHoldTrail(value => !value)}>{holdTrail ? 'Resume' : 'Hold'}</button></div></div>
-            <PitchContour points={trail} now={trailNow} saHz={saHz} centerSemi={centerSemi} seconds={trailSeconds} raga={selectedRaga} />
+            <div className={styles.contourHeader}><div><span className={styles.label}>SVARA PITCH CONTOUR</span><p>Drag to move pitch · pinch or scroll to zoom</p></div><div className={styles.contourControls}><div className={styles.zoomControls} aria-label="Pitch chart time window">{[8, 16, 30].map(seconds => <button key={seconds} aria-pressed={trailSeconds === seconds} onClick={() => setTrailSeconds(seconds)}>{seconds}s</button>)}</div><div className={styles.octaveControls} aria-label="Pitch chart octave"><button aria-label="Shift chart down one octave" onClick={() => setCenterSemi(value => value - 12)}>↓</button><button aria-label="Center chart on Sa" onClick={() => setCenterSemi(0)}>Sa</button><button aria-label="Shift chart up one octave" onClick={() => setCenterSemi(value => value + 12)}>↑</button></div><div className={styles.octaveControls} aria-label="Pitch chart zoom"><button aria-label="Zoom out pitch chart" disabled={rangeSemis >= 60} onClick={() => setRangeSemis(value => Math.min(60, value + 6))}>−</button><button aria-label="Reset pitch chart view" title="Reset pitch view" onClick={() => { setCenterSemi(6); setRangeSemis(36) }}>{(rangeSemis / 12).toFixed(1)} oct</button><button aria-label="Zoom in pitch chart" disabled={rangeSemis <= 12} onClick={() => setRangeSemis(value => Math.max(12, value - 6))}>+</button></div><button className={styles.holdButton} aria-pressed={holdTrail} disabled={status !== 'listening'} onClick={() => setHoldTrail(value => !value)}>{holdTrail ? 'Resume' : 'Hold'}</button></div></div>
+            <PitchContour points={trail} now={trailNow} saHz={saHz} centerSemi={centerSemi} rangeSemis={rangeSemis} onViewChange={(center, range) => { setCenterSemi(center); setRangeSemis(range) }} seconds={trailSeconds} raga={selectedRaga} />
           </section>
           <div className={styles.pitchStrip} aria-label="Current pitch and tuning offset">
             <div className={styles.stripValue}><span>DETECTED PITCH</span><strong>{reading ? reading.frequency.toFixed(1) : '—'}</strong><small>Hz</small></div>
