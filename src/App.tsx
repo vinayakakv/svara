@@ -367,7 +367,6 @@ function App() {
           setReading({ ...detected, frequency })
           const activeRaga = ragaRef.current
           const ragaPitch = activeRaga ? ragaPitchAtFrequency(frequency, saHzRef.current, activeRaga) : null
-          let outside = false
           if (ragaPitch && !ragaPitch.allowed && Math.abs(ragaPitch.cents) <= 30) {
             let candidate = outsideCandidateRef.current
             if (!candidate || candidate.semitone !== ragaPitch.semitone) {
@@ -376,7 +375,6 @@ function App() {
               setRagaWarning(null)
             }
             if (at - candidate.since >= 220) {
-              outside = true
               if (!candidate.announced) {
                 candidate.announced = true
                 const event = { label: ragaPitch.label, frequency, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) }
@@ -393,7 +391,7 @@ function App() {
             setRagaWarning(null)
           }
           if (!holdTrailRef.current) {
-            setTrail(previous => [...previous.filter(point => at - point.at <= 30000), { at, frequency, outside }])
+            setTrail(previous => [...previous.filter(point => at - point.at <= 30000), { at, frequency }])
             setTrailNow(at)
           }
           const noteName = noteForFrequency(frequency).name
@@ -513,7 +511,6 @@ function App() {
     lastRagaEventRef.current = null
     setRagaWarning(null)
     setRagaEvents([])
-    setTrail([])
   }
 
   return (

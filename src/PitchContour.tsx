@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { SHORT_SWARAS, swaraForFrequency } from './audio/pitch'
 import { ragaSwaraAtClass, type Raga } from './music/ragas'
+import { markOutsideTrail, type TrailPoint } from './music/ragaTrail'
 import styles from './PitchContour.module.css'
 
-export type PitchPoint = { at: number; frequency: number | null; outside?: boolean }
+export type PitchPoint = TrailPoint
 
 type Props = {
   points: PitchPoint[]
@@ -48,7 +49,11 @@ export default function PitchContour({ points, now, saHz, centerSemi, rangeSemis
     if (rangeSemis > 28) return [0, 2, 5, 7, 9].includes(pitchClass)
     return LABELED_STEPS.has(pitchClass) || Boolean(raga?.pitchClasses.includes(pitchClass))
   })
-  const visible = points.filter(point => point.at >= start && point.at <= now)
+  const marked = useMemo(() => {
+    const outside = markOutsideTrail(points, raga, saHz)
+    return points.map((point, index) => ({ ...point, outside: outside[index] }))
+  }, [points, raga, saHz])
+  const visible = marked.filter(point => point.at >= start && point.at <= now)
 
   const segments = useMemo(() => {
     const paths: { points: string; outside: boolean }[] = []
