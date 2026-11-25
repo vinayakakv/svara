@@ -37,6 +37,8 @@ p{margin:0}
 .signal{flex:none}
 .logCard{height:217px}
 .logList{max-height:168px}
+.logCard:not([open]){height:auto}.logCard summary{list-style:none;cursor:pointer}.logCard summary::-webkit-details-marker{display:none}.logChevron{display:inline-block;margin-left:5px;transition:transform .15s}.logCard[open] .logChevron{transform:rotate(180deg)}
+@media(max-width:580px){.logCard[open]{height:170px}}
 .stripValue{grid-template-columns:max-content auto}
 .stripValue:nth-child(1) strong{width:6ch}
 .stripValue:nth-child(2) strong,.stripValue:nth-child(3) strong{width:4ch}
